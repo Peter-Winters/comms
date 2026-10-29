@@ -1,0 +1,14 @@
+{
+  "name": "comms-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node setup.mjs",
+    "up": "docker compose up -d",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f --tail=100"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0"
+  }
+}

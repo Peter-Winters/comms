@@ -1,0 +1,131 @@
+# Comms backend: a Matrix homeserver plus one bridge per chat network.
+# Run `npm run setup` first — it generates every config under ./data.
+# Which bridges start is controlled by COMPOSE_PROFILES in .env.
+
+x-bridge: &bridge
+  restart: unless-stopped
+  depends_on:
+    synapse:
+      condition: service_started
+
+services:
+  # The only service exposed to the network. Routes the Matrix API to Synapse and each
+  # bridge's provisioning API (used by the app's native login screens) to that bridge.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [synapse]
+    ports:
+      - "${PORT:-8008}:80"
+    volumes:
+      - ./data/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: comms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U comms"]
+      interval: 5s
+      retries: 20
+      # Recovery after an unclean shutdown (e.g. PC restarted) can take minutes on Docker Desktop.
+      start_period: 600s
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/synapse:/data
+
+  # Receives push notifications from Synapse and forwards them to phones via Expo's push service.
+  pushgateway:
+    image: node:22-alpine
+    restart: unless-stopped
+    command: ["node", "/app/gateway.mjs"]
+    environment:
+      PUSH_CONTENT: ${PUSH_CONTENT:-full}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+    volumes:
+      - ./pushgateway:/app:ro
+
+  whatsapp:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    profiles: [whatsapp]
+    volumes: [./data/whatsapp:/data]
+
+  signal:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/signal:latest
+    profiles: [signal]
+    volumes: [./data/signal:/data]
+
+  telegram:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/telegram:latest
+    profiles: [telegram]
+    volumes: [./data/telegram:/data]
+
+  messenger:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/meta:latest
+    profiles: [messenger]
+    volumes: [./data/messenger:/data]
+
+  # Experimental: current Meta bridge releases dropped Instagram, so this pins the last
+  # release that supports it (July 2025). It may stop working as Instagram changes.
+  instagram:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/meta:v0.5.2
+    profiles: [instagram]
+    volumes: [./data/instagram:/data]
+
+  gmessages:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/gmessages:latest
+    profiles: [gmessages]
+    volumes: [./data/gmessages:/data]
+
+  gvoice:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/gvoice:latest
+    profiles: [gvoice]
+    volumes: [./data/gvoice:/data]
+
+  discord:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/discord:latest
+    profiles: [discord]
+    volumes: [./data/discord:/data]
+
+  slack:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/slack:latest
+    profiles: [slack]
+    volumes: [./data/slack:/data]
+
+  linkedin:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/linkedin:latest
+    profiles: [linkedin]
+    volumes: [./data/linkedin:/data]
+
+  twitter:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/twitter:latest
+    profiles: [twitter]
+    volumes: [./data/twitter:/data]
+
+  bluesky:
+    <<: *bridge
+    image: dock.mau.dev/mautrix/bluesky:latest
+    profiles: [bluesky]
+    volumes: [./data/bluesky:/data]
