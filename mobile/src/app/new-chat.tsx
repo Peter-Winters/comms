@@ -1,8 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { Text, TextInput } from '@/components/themed';
 import { Avatar } from '@/components/avatar';
 import { NetworkIcon } from '@/components/network-icon';
 import type { Contact } from '@/lib/bridges';

@@ -37,7 +37,7 @@ export const NETWORKS: Record<NetworkId, NetworkInfo> = {
     botLocalpart: 'messengerbot', protocolIds: ['facebook', 'messenger', 'facebook-messenger'], puppetPrefixes: ['messenger_', 'facebook_'],
   },
   gmessages: {
-    id: 'gmessages', name: 'Google Messages', color: '#1A73E8', icon: 'comment-sms', iconStyle: 'solid',
+    id: 'gmessages', name: 'Text messages (SMS)', color: '#1A73E8', icon: 'comment-sms', iconStyle: 'solid',
     botLocalpart: 'gmessagesbot', protocolIds: ['gmessages', 'googlemessages'], puppetPrefixes: ['gmessages_'],
   },
   gvoice: {

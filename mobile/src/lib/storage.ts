@@ -2,17 +2,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
+import type { ThemeStyle } from '@/theme/themes';
 import type { MatrixSession } from './backends/matrix';
 
 export type StoredSession = { kind: 'demo' } | { kind: 'matrix'; session: MatrixSession };
 
 export type Prefs = {
+  /** Light or dark mode. */
   theme: 'system' | 'light' | 'dark';
+  /** The look: colours, font and shapes. */
+  themeStyle: ThemeStyle;
   /** Show a preview of message text in the inbox. */
   showPreviews: boolean;
 };
 
-export const DEFAULT_PREFS: Prefs = { theme: 'system', showPreviews: true };
+export const DEFAULT_PREFS: Prefs = { theme: 'system', themeStyle: 'classic', showPreviews: true };
 
 const SESSION_KEY = 'comms.session';
 const PREFS_KEY = 'comms.prefs';

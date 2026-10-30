@@ -1,11 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import type { LoginStep } from '@/lib/bridges';
 import { useColors } from '@/lib/store';
+import { Text } from './themed';
 import { clearWebviewCookies, getWebviewCookies } from '../../modules/webview-cookies';
 
 type Props = {

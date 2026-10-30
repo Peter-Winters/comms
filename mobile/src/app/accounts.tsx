@@ -1,8 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
+import { Text } from '@/components/themed';
 import { openChat } from '@/components/chat-list';
 import { NetworkIcon } from '@/components/network-icon';
 import type { BridgeLogin } from '@/lib/bridges';

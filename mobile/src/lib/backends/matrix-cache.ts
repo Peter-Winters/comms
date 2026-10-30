@@ -1,11 +1,14 @@
 import { File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
+import type { RichSpan } from '../types';
+
 // Persists the Matrix client's room state between launches, so the inbox appears instantly
 // and the next sync only fetches what changed.
 
 const MAX_EVENTS_PER_ROOM = 80;
-const VERSION = 1;
+// Bump when the shape of cached messages changes (2: reels, 3: mentions, 4: polls, 5: formatting, 6: failed media), so old caches are re-fetched.
+const VERSION = 6;
 
 /** Plain-JSON form of a room; mirrors the Room type in matrix.ts. */
 export type CachedRoom = {
@@ -13,7 +16,8 @@ export type CachedRoom = {
   state: [string, [string, unknown][]][];
   events: any[];
   reactions: [string, [string, [string, string][]][]][];
-  edits: [string, { text: string; ts: number }][];
+  edits: [string, { text: string; ts: number; mentions?: string[]; rich?: RichSpan[]; unavailable?: boolean }][];
+  pollVotes?: [string, [string, { answers: string[]; ts: number }][]][];
   prevBatch?: string;
   hasMore: boolean;
   /** Older events were dropped when caching; pagination must restart from the oldest kept one. */

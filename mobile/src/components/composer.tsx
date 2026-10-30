@@ -6,23 +6,35 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
-import { useState, type Ref } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useMemo, useState, type Ref } from 'react';
+import { Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { formatDuration, pickFiles, pickFromLibrary, takePhoto } from '@/lib/media';
-import { useColors } from '@/lib/store';
-import type { OutgoingMedia } from '@/lib/types';
+import { useTheme } from '@/lib/store';
+import type { Member, OutgoingMedia } from '@/lib/types';
 import { ActionSheet } from './action-sheet';
+import { Avatar } from './avatar';
+import { Text, TextInput, type TextInputRef } from './themed';
 
 type Props = {
   placeholder: string;
   bottomInset: number;
-  inputRef?: Ref<TextInput>;
+  inputRef?: Ref<TextInputRef>;
+  draft: string;
+  onChangeDraft: (text: string) => void;
+  /** Editing an existing message: the send button saves instead. */
+  editing?: boolean;
+  /** People who can be @mentioned; typing "@" suggests them. */
+  members?: Member[];
+  onMention?: (member: Member) => void;
   /** Hide attachments and voice notes (e.g. bridge command chats). */
   textOnly?: boolean;
   onSendText: (text: string) => void;
   onSendMedia: (media: OutgoingMedia) => void;
 };
+
+/** The "@partial name" being typed at the end of the draft, if any. */
+const MENTION_QUERY = /(?:^|\s)@([^\s@]*)$/;
 
 function alertError(e: unknown) {
   const message = (e as Error)?.message ?? String(e);
@@ -30,9 +42,21 @@ function alertError(e: unknown) {
   else Alert.alert('Something went wrong', message);
 }
 
-export function Composer({ placeholder, bottomInset, inputRef, textOnly, onSendText, onSendMedia }: Props) {
-  const colors = useColors();
-  const [draft, setDraft] = useState('');
+export function Composer({
+  placeholder,
+  bottomInset,
+  inputRef,
+  draft,
+  onChangeDraft,
+  editing,
+  members,
+  onMention,
+  textOnly,
+  onSendText,
+  onSendMedia,
+}: Props) {
+  const { colors, radius } = useTheme();
+  const round = { borderRadius: 20 * radius };
   const [attachOpen, setAttachOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -42,7 +66,19 @@ export function Composer({ placeholder, bottomInset, inputRef, textOnly, onSendT
     const text = draft.trim();
     if (!text) return;
     onSendText(text);
-    setDraft('');
+  };
+
+  const query = draft.match(MENTION_QUERY)?.[1];
+  const suggestions = useMemo(() => {
+    if (query === undefined || !members?.length) return [];
+    const q = query.toLowerCase();
+    // Match the start of any word, so "@pri" finds "Priya" and "@pat" finds "Sean Patrick".
+    return members.filter((m) => m.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(q))).slice(0, 5);
+  }, [query, members]);
+
+  const pickMention = (member: Member) => {
+    onChangeDraft(draft.replace(MENTION_QUERY, (whole) => `${whole.startsWith('@') ? '' : whole[0]}@${member.name} `));
+    onMention?.(member);
   };
 
   const attach = async (pick: () => Promise<OutgoingMedia[]>) => {
@@ -92,9 +128,24 @@ export function Composer({ placeholder, bottomInset, inputRef, textOnly, onSendT
 
   return (
     <>
+      {suggestions.length > 0 && (
+        <View style={[styles.suggestions, { backgroundColor: colors.surface, borderRadius: 12 * radius }]}>
+          {suggestions.map((m) => (
+            <Pressable
+              key={m.userId}
+              onPress={() => pickMention(m)}
+              style={({ pressed }) => [styles.suggestion, pressed && { backgroundColor: colors.surfaceAlt }]}>
+              <Avatar title={m.name} image={m.avatar} size={28} />
+              <Text style={{ color: colors.text, fontSize: 15 }} numberOfLines={1}>
+                {m.name}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <View style={[styles.composer, { paddingBottom: bottomInset }]}>
         {recording ? (
-          <View style={[styles.recording, { backgroundColor: colors.surface }]}>
+          <View style={[styles.recording, round, { backgroundColor: colors.surface }]}>
             <Pressable hitSlop={10} onPress={() => finishRecording(false)}>
               <Ionicons name="trash-outline" size={22} color={colors.danger} />
             </Pressable>
@@ -114,11 +165,11 @@ export function Composer({ placeholder, bottomInset, inputRef, textOnly, onSendT
             <TextInput
               ref={inputRef}
               value={draft}
-              onChangeText={setDraft}
+              onChangeText={onChangeDraft}
               placeholder={placeholder}
               placeholderTextColor={colors.textFaint}
               multiline
-              style={[styles.input, { backgroundColor: colors.surface, color: colors.text }]}
+              style={[styles.input, round, { backgroundColor: colors.surface, color: colors.text }]}
               onKeyPress={(e) => {
                 // On web, Enter sends and Shift+Enter adds a newline.
                 const ne = e.nativeEvent as unknown as { key: string; shiftKey?: boolean };
@@ -134,15 +185,15 @@ export function Composer({ placeholder, bottomInset, inputRef, textOnly, onSendT
           <Pressable
             onPress={sendText}
             disabled={!hasText}
-            style={[styles.send, { backgroundColor: hasText ? colors.accent : colors.surface }]}>
-            <Ionicons name="arrow-up" size={20} color={hasText ? colors.accentText : colors.textFaint} />
+            style={[styles.send, round, { backgroundColor: hasText ? colors.accent : colors.surface }]}>
+            <Ionicons name={editing ? 'checkmark' : 'arrow-up'} size={20} color={hasText ? colors.accentText : colors.textFaint} />
           </Pressable>
         ) : recording ? (
-          <Pressable onPress={() => finishRecording(true)} style={[styles.send, { backgroundColor: colors.accent }]}>
+          <Pressable onPress={() => finishRecording(true)} style={[styles.send, round, { backgroundColor: colors.accent }]}>
             <Ionicons name="arrow-up" size={20} color={colors.accentText} />
           </Pressable>
         ) : (
-          <Pressable onPress={startRecording} style={[styles.send, { backgroundColor: colors.surface }]}>
+          <Pressable onPress={startRecording} style={[styles.send, round, { backgroundColor: colors.surface }]}>
             <Ionicons name="mic" size={20} color={colors.text} />
           </Pressable>
         )}
@@ -167,21 +218,21 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 40,
     maxHeight: 140,
-    borderRadius: 20,
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 10,
     fontSize: 16,
   },
-  send: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  send: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   recording: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     height: 40,
-    borderRadius: 20,
     paddingHorizontal: 14,
   },
   dot: { width: 10, height: 10, borderRadius: 5 },
+  suggestions: { marginHorizontal: 12, marginTop: 6, paddingVertical: 4, overflow: 'hidden' },
+  suggestion: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
 });

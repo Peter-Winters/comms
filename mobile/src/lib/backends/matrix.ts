@@ -15,12 +15,18 @@ import type {
   MediaInfo,
   Message,
   MessageKind,
+  LinkPreview,
+  Member,
   NetworkId,
   OutgoingMedia,
+  Poll,
+  RichSpan,
   SearchResult,
 } from '../types';
-import { previewText } from '../format';
+import { previewText, sharedPostFrom, stripLinks } from '../format';
+import { hasFormatting, parseHtml, plainText } from '../rich-text';
 import { BaseBackend, type Backend, type BackendSnapshot } from './backend';
+import { ImportTracker } from './imports';
 import { MatrixBridges, type CommsServerConfig } from './matrix-bridges';
 import { clearCache, loadCache, saveCache, trimEvents, type CachedRoom } from './matrix-cache';
 
@@ -56,7 +62,10 @@ type Room = {
   reactions: Map<string, Map<string, Map<string, string>>>;
   /** reaction event id -> [target, key, sender], for redactions */
   reactionIndex: Map<string, [string, string, string]>;
-  edits: Map<string, { text: string; ts: number }>;
+  /** Edits by id of the edited message. `unavailable`: the bridge replaced it with a "failed to bridge" notice. */
+  edits: Map<string, { text: string; ts: number; mentions?: string[]; rich?: RichSpan[]; unavailable?: boolean }>;
+  /** poll event -> voter -> their latest vote */
+  pollVotes: Map<string, Map<string, { answers: string[]; ts: number }>>;
   pending: BaseMessage[];
   prevBatch?: string;
   hasMore: boolean;
@@ -69,6 +78,8 @@ type Room = {
   markedUnread: boolean;
   archivedAt?: number;
   othersReadTs: number;
+  /** People typing right now (not cached). */
+  typing: string[];
   createdTs: number;
   built?: Message[];
 };
@@ -76,11 +87,14 @@ type Room = {
 const NO_MESSAGES: Message[] = [];
 const ARCHIVE_TYPE = 'com.comms.archive';
 const BRIDGE_TYPES = ['m.bridge', 'uk.half-shot.bridge'];
+const POLL_START_TYPES = ['org.matrix.msc3381.poll.start', 'm.poll.start'];
+const POLL_RESPONSE_TYPES = ['org.matrix.msc3381.poll.response', 'm.poll.response'];
+const POLL_RESPONSE = 'org.matrix.msc3381.poll.response';
 const SYNC_FILTER = JSON.stringify({
   room: {
     timeline: { limit: 30 },
     state: { lazy_load_members: true },
-    ephemeral: { types: ['m.receipt'] },
+    ephemeral: { types: ['m.receipt', 'm.typing'] },
   },
   presence: { types: [] },
 });
@@ -123,6 +137,74 @@ export async function matrixLogin(homeserver: string, username: string, password
   };
 }
 
+/** Older bridge configs tag every contact's name with the network, e.g. "Brie (WA)". The app shows a badge instead. */
+/** HTML for a message with mentions, so bridges turn "@Name" into a real mention. */
+function mentionContent(text: string, mentions?: Member[]) {
+  const used = (mentions ?? []).filter((m) => text.includes(`@${m.name}`));
+  if (!used.length) return {};
+  let html = escapeHtml(text);
+  for (const m of used) {
+    const link = `<a href="https://matrix.to/#/${encodeURIComponent(m.userId)}">${escapeHtml(m.name)}</a>`;
+    html = html.replace(escapeHtml(`@${m.name}`), link);
+  }
+  return {
+    format: 'org.matrix.custom.html',
+    formatted_body: html.replace(/\n/g, '<br>'),
+    'm.mentions': { user_ids: used.map((m) => m.userId) },
+  };
+}
+
+/** Reads a poll from MSC3381 (unstable) or Matrix 1.7 (stable) content. */
+function pollFrom(content: any): Poll | undefined {
+  const unstable = content?.['org.matrix.msc3381.poll.start'];
+  const stable = content?.['m.poll'];
+  const textOf = (t: any): string =>
+    typeof t === 'string' ? t : (t?.['org.matrix.msc1767.text'] ?? t?.['m.text']?.[0]?.body ?? t?.body ?? '');
+  if (unstable?.answers) {
+    return {
+      question: textOf(unstable.question),
+      options: unstable.answers.map((a: any) => ({ id: String(a.id), text: textOf(a), voters: [], mine: false })),
+      maxSelections: Math.max(1, Number(unstable.max_selections) || 1),
+      totalVoters: 0,
+    };
+  }
+  if (stable?.answers) {
+    return {
+      question: textOf(stable.question),
+      options: stable.answers.map((a: any) => ({ id: String(a['m.id']), text: textOf(a), voters: [], mine: false })),
+      maxSelections: Math.max(1, Number(stable.max_selections) || 1),
+      totalVoters: 0,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * "* Failed to bridge photo…" notices, optionally followed by the sender's caption, as
+ * "Photo couldn't be loaded" with the caption on the next line.
+ */
+function unavailableText(body: string): string | undefined {
+  const m = body.match(/^(?:\* )?Failed to bridge ([^\n]*)\n*([\s\S]*)$/);
+  if (!m) return undefined;
+  const what = /video/i.test(m[1]) ? 'Video' : /photo|image|sticker/i.test(m[1]) ? 'Photo' : 'Media';
+  const reason = /no longer available/i.test(m[1]) ? 'is no longer on your phone' : "couldn't be loaded";
+  return m[2] ? `${what} ${reason}\n${m[2]}` : `${what} ${reason}`;
+}
+
+/** What's left of a message once it's deleted: who sent it and when. */
+function deletedMessage(m: BaseMessage): BaseMessage {
+  const { id, chatId, senderId, senderName, fromMe, ts, replyToId } = m;
+  return { id, chatId, senderId, senderName, fromMe, ts, replyToId, kind: 'deleted', text: '' };
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function withoutNetworkSuffix(name: string) {
+  return name.replace(/ \((WA|Signal|Telegram|FB Messenger|Instagram|SMS)\)$/, '');
+}
+
 export class MatrixBackend extends BaseBackend implements Backend {
   readonly kind = 'matrix' as const;
   private rooms = new Map<string, Room>();
@@ -144,6 +226,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
   private appStateSub?: NativeEventSubscription;
   private configLoaded!: () => void;
   private configReady = new Promise<void>((resolve) => (this.configLoaded = resolve));
+  private imports = new ImportTracker(() => this.publish());
   readonly bridges: MatrixBridges;
 
   constructor(
@@ -166,6 +249,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
       displayName: session.userId,
       chats: [],
       accounts: [],
+      importing: [],
     };
   }
 
@@ -255,6 +339,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
     this.running = false;
     this.abort?.abort();
     this.appStateSub?.remove();
+    this.imports.stop();
     this.flushSave();
   }
 
@@ -343,6 +428,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
         reactions: new Map(),
         reactionIndex: new Map(),
         edits: new Map(),
+        pollVotes: new Map(),
         pending: [],
         hasMore: true,
         trimmed: false,
@@ -352,6 +438,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
         tags: {},
         markedUnread: false,
         othersReadTs: 0,
+        typing: [],
         createdTs: 0,
       };
       this.rooms.set(id, room);
@@ -405,6 +492,12 @@ export class MatrixBackend extends BaseBackend implements Backend {
       }
 
       for (const ev of data.ephemeral?.events ?? []) {
+        if (ev.type === 'm.typing') {
+          room.typing = (ev.content.user_ids ?? []).filter(
+            (u: string) => u !== this.session.userId && !networkFromBotUserId(u),
+          );
+          continue;
+        }
         if (ev.type !== 'm.receipt') continue;
         for (const receipts of Object.values<any>(ev.content)) {
           for (const [userId, info] of Object.entries<any>(receipts['m.read'] ?? {})) {
@@ -459,13 +552,44 @@ export class MatrixBackend extends BaseBackend implements Backend {
     return room.state.get(type)?.get(key);
   }
 
+  /**
+   * Reads formatting from the HTML body. Bridges put mentions there as matrix.to links while the
+   * plain body just has the name (often with a " (WA)" suffix), so mentions come out as "@Name".
+   */
+  private formatted(room: Room, content: any, body: string): Pick<BaseMessage, 'text' | 'mentions' | 'rich'> {
+    const html: unknown = content?.format === 'org.matrix.custom.html' ? content.formatted_body : undefined;
+    if (typeof html !== 'string') return { text: body };
+    const spans = parseHtml(html, (userId, linkText) =>
+      withoutNetworkSuffix(linkText.replace(/^@/, '')) || this.memberName(room, userId),
+    );
+    if (!spans.length) return { text: body };
+    const mentions = spans.filter((s) => s.mention).map((s) => s.text);
+    return {
+      text: plainText(spans),
+      mentions: mentions.length ? mentions : undefined,
+      rich: hasFormatting(spans) ? spans : undefined,
+    };
+  }
+
   private memberName(room: Room, userId: string) {
-    return this.stateContent(room, 'm.room.member', userId)?.displayname ?? userId.replace(/^@/, '').split(':')[0];
+    const name = this.stateContent(room, 'm.room.member', userId)?.displayname;
+    return name ? withoutNetworkSuffix(name) : userId.replace(/^@/, '').split(':')[0];
   }
 
   private applyTimelineEvent(room: Room, ev: MxEvent, mode: 'append' | 'prepend') {
     room.built = undefined;
     const rel = ev.content?.['m.relates_to'];
+
+    if (POLL_RESPONSE_TYPES.includes(ev.type) && rel?.event_id) {
+      const answers: unknown = ev.content[POLL_RESPONSE]?.answers ?? ev.content['m.selections'];
+      let byVoter = room.pollVotes.get(rel.event_id);
+      if (!byVoter) room.pollVotes.set(rel.event_id, (byVoter = new Map()));
+      const prev = byVoter.get(ev.sender);
+      if (Array.isArray(answers) && (!prev || prev.ts <= ev.origin_server_ts)) {
+        byVoter.set(ev.sender, { answers: answers.filter((a) => typeof a === 'string'), ts: ev.origin_server_ts });
+      }
+      return;
+    }
 
     if (ev.type === 'm.reaction' && rel?.rel_type === 'm.annotation') {
       let byKey = room.reactions.get(rel.event_id);
@@ -484,7 +608,8 @@ export class MatrixBackend extends BaseBackend implements Backend {
         room.reactions.get(reaction[0])?.get(reaction[1])?.delete(reaction[2]);
         room.reactionIndex.delete(target);
       } else {
-        room.events = room.events.filter((m) => m.id !== target);
+        room.events = room.events.map((m) => (m.id === target ? deletedMessage(m) : m));
+        room.edits.delete(target);
       }
       return;
     }
@@ -492,7 +617,15 @@ export class MatrixBackend extends BaseBackend implements Backend {
     if (rel?.rel_type === 'm.replace' && ev.content['m.new_content']) {
       const prev = room.edits.get(rel.event_id);
       if (!prev || prev.ts <= ev.origin_server_ts) {
-        room.edits.set(rel.event_id, { text: ev.content['m.new_content'].body ?? '', ts: ev.origin_server_ts });
+        const content = ev.content['m.new_content'];
+        // Bridges post a placeholder for media, then edit it into a notice if the download fails.
+        const failed = content.msgtype === 'm.notice' ? unavailableText(content.body ?? '') : undefined;
+        room.edits.set(
+          rel.event_id,
+          failed
+            ? { text: failed, unavailable: true, ts: ev.origin_server_ts }
+            : { ...this.formatted(room, content, content.body ?? ''), ts: ev.origin_server_ts },
+        );
       }
       return;
     }
@@ -510,7 +643,6 @@ export class MatrixBackend extends BaseBackend implements Backend {
   }
 
   private toMessage(room: Room, ev: MxEvent): BaseMessage | undefined {
-    if (ev.unsigned?.redacted_because) return undefined;
     const fromMe = ev.sender === this.session.userId;
     const base = {
       id: ev.event_id,
@@ -520,12 +652,21 @@ export class MatrixBackend extends BaseBackend implements Backend {
       fromMe,
       ts: ev.origin_server_ts,
     };
+    if (ev.unsigned?.redacted_because) {
+      const visible = ev.type === 'm.room.message' || ev.type === 'm.sticker' || POLL_START_TYPES.includes(ev.type);
+      return visible ? deletedMessage({ ...base, kind: 'text', text: '' }) : undefined;
+    }
 
     if (ev.type === 'm.room.encrypted') {
       return { ...base, kind: 'encrypted', text: 'Encrypted message — this client cannot decrypt it yet' };
     }
     if (ev.type === 'm.sticker') {
       return { ...base, kind: 'image', text: ev.content.body ?? 'Sticker', image: this.imageFrom(ev.content) };
+    }
+    // WhatsApp sends polls as text messages with the poll attached; other bridges send poll events.
+    const poll = pollFrom(ev.content);
+    if (poll && (ev.type === 'm.room.message' || POLL_START_TYPES.includes(ev.type))) {
+      return { ...base, kind: 'poll', text: poll.question, poll };
     }
     if (ev.type !== 'm.room.message' || !ev.content?.msgtype) return undefined;
 
@@ -534,15 +675,27 @@ export class MatrixBackend extends BaseBackend implements Backend {
     let text: string = c.body ?? '';
     if (replyToId) text = stripReplyFallback(text);
 
+    // "* Failed to bridge photo…", sometimes followed by the photo's caption.
+    const failed = c.msgtype === 'm.notice' ? unavailableText(text) : undefined;
+    if (failed) {
+      return { ...base, kind: 'unavailable', text: failed, replyToId };
+    }
+
     let kind: MessageKind = 'text';
     let image: ImageRef | undefined;
     let media: MediaInfo | undefined;
+    let formatting: Pick<BaseMessage, 'text' | 'mentions' | 'rich'> = { text };
     switch (c.msgtype) {
+      case 'm.text':
+        formatting = this.formatted(room, c, text);
+        break;
       case 'm.notice':
         kind = 'notice';
+        formatting = this.formatted(room, c, text);
         break;
       case 'm.emote':
         kind = 'emote';
+        formatting = this.formatted(room, c, text);
         break;
       case 'm.image':
         kind = 'image';
@@ -562,9 +715,40 @@ export class MatrixBackend extends BaseBackend implements Backend {
         media = this.mediaFrom(c);
         break;
     }
+    // Instagram shares arrive as the reel's thumbnail (or video) with a link to the original.
+    const share = media ? sharedPostFrom(c.external_url) : undefined;
+    if (share) formatting = { text: stripLinks(text) };
     // Media captions: body is the file name unless a separate filename is given.
-    if (media && !(c.filename && c.filename !== c.body)) text = '';
-    return { ...base, kind, text, image, media, replyToId, status: fromMe ? 'sent' : undefined };
+    else if (media && !(c.filename && c.filename !== c.body)) formatting = { text: '' };
+    return {
+      ...base,
+      ...formatting,
+      kind,
+      image,
+      media,
+      share,
+      linkPreview: this.linkPreviewFrom(c),
+      replyToId,
+      status: fromMe ? 'sent' : undefined,
+    };
+  }
+
+  /** Beeper-style link previews the bridges attach (title, description, image). */
+  private linkPreviewFrom(content: any): LinkPreview | undefined {
+    const p = (content['com.beeper.linkpreviews'] ?? []).find((x: any) => x?.matched_url);
+    if (!p || !(p['og:title'] || p['og:description'])) return undefined;
+    const url: string = p['og:url'] ?? p.matched_url;
+    let site = url;
+    try {
+      site = new URL(url).hostname.replace(/^www\./, '');
+    } catch {}
+    return {
+      url: p.matched_url,
+      title: p['og:title'],
+      description: p['og:description'],
+      image: typeof p['og:image'] === 'string' ? this.mediaRef(p['og:image'], 600, 'scale') : undefined,
+      site,
+    };
   }
 
   /** Bubble-sized image: a scaled server thumbnail rather than the full original. */
@@ -587,6 +771,8 @@ export class MatrixBackend extends BaseBackend implements Backend {
       width: info.w,
       height: info.h,
       voice: !!content['org.matrix.msc3245.voice'],
+      gif: !!(info['fi.mau.gif'] || info['fi.mau.autoplay']),
+      contact: /^text\/(x-)?vcard/i.test(info.mimetype ?? '') || /\.vcf$/i.test(content.filename ?? content.body ?? ''),
       thumbnail: this.mediaRef(info.thumbnail_url, 800, 'scale'),
     };
   }
@@ -631,10 +817,14 @@ export class MatrixBackend extends BaseBackend implements Backend {
 
   private buildChat(room: Room): Chat {
     const { network, control, dm } = this.classify(room);
-    const name: string | undefined = this.stateContent(room, 'm.room.name')?.name;
+    const rawName: string | undefined = this.stateContent(room, 'm.room.name')?.name;
+    const name = rawName && withoutNetworkSuffix(rawName);
     const heroes = room.heroes.filter((h) => h !== this.session.userId && !networkFromBotUserId(h));
     let title = name || heroes.map((h) => this.memberName(room, h)).join(', ');
-    if (!title) title = this.stateContent(room, 'm.room.canonical_alias')?.alias ?? 'Empty chat';
+    title ||= this.stateContent(room, 'm.room.canonical_alias')?.alias ?? '';
+    // Bridges create a portal before they fill in its name and members.
+    const incomplete = !title && !control && network !== 'matrix';
+    if (!title) title = 'Empty chat';
     if (control) title = `${NETWORKS[control].name} bridge`;
 
     let avatarMxc: string | undefined = this.stateContent(room, 'm.room.avatar')?.url;
@@ -642,7 +832,8 @@ export class MatrixBackend extends BaseBackend implements Backend {
 
     const all = [...room.events, ...room.pending];
     const last = all[all.length - 1];
-    const lastText = last ? (room.edits.get(last.id)?.text ?? last.text) : undefined;
+    const lastEdit = last && room.edits.get(last.id);
+    const lastText = lastEdit?.text ?? last?.text;
 
     return {
       id: room.id,
@@ -652,7 +843,9 @@ export class MatrixBackend extends BaseBackend implements Backend {
       isGroup: !dm,
       memberCount: room.joinedCount || undefined,
       lastMessage: last && {
-        text: previewText(last.kind, lastText ?? '', last.media),
+        text: lastEdit?.unavailable
+          ? previewText('unavailable', lastText ?? '')
+          : previewText(last.kind, lastText ?? '', last.media, last.share),
         ts: last.ts,
         senderName: last.senderName,
         fromMe: last.fromMe,
@@ -666,6 +859,8 @@ export class MatrixBackend extends BaseBackend implements Backend {
       archivedAt: room.archivedAt,
       isBridgeControl: !!control,
       encrypted: !!this.stateContent(room, 'm.room.encryption'),
+      incomplete,
+      typing: room.typing.length ? room.typing.map((u) => this.memberName(room, u).split(' ')[0]) : undefined,
     };
   }
 
@@ -684,12 +879,28 @@ export class MatrixBackend extends BaseBackend implements Backend {
   }
 
   private publish(status = this.snapshot.status, statusDetail?: string) {
+    const touched = new Set<NetworkId>();
     for (const id of this.dirty) {
       const room = this.rooms.get(id);
-      if (room) this.chatCache.set(id, this.buildChat(room));
+      if (!room) continue;
+      // Bridges group each account's chats into a space (e.g. "WhatsApp (+353…)"). It's a folder, not a chat.
+      if (this.stateContent(room, 'm.room.create')?.type === 'm.space') {
+        this.chatCache.delete(id);
+        continue;
+      }
+      const chat = this.buildChat(room);
+      this.chatCache.set(id, chat);
+      if (!chat.isBridgeControl && chat.network !== 'matrix') touched.add(chat.network);
     }
     this.dirty.clear();
     const chats = [...this.chatCache.values()];
+    for (const n of touched) {
+      this.imports.activity(n, chats.filter((c) => c.network === n && !c.isBridgeControl && !c.incomplete).length);
+    }
+    // Networks that already have chats once we've caught up (or restored the cache) aren't imports.
+    if (status === 'ready' || status === 'syncing') {
+      this.imports.setBaseline(chats.filter((c) => !c.isBridgeControl).map((c) => c.network));
+    }
     this.snapshot = {
       status,
       statusDetail,
@@ -697,6 +908,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
       displayName: this.displayName,
       chats,
       accounts: this.buildAccounts(chats),
+      importing: this.imports.list(),
     };
     this.emit();
   }
@@ -721,11 +933,32 @@ export class MatrixBackend extends BaseBackend implements Backend {
       const edit = room.edits.get(m.id);
       const target = replyToId ? byId.get(replyToId) : undefined;
       const reactions = [...(room.reactions.get(m.id) ?? new Map()).entries()]
-        .map(([key, senders]) => ({ key, count: senders.size, mine: senders.has(this.session.userId) }))
+        .map(([key, senders]) => ({
+          key,
+          count: senders.size,
+          mine: senders.has(this.session.userId),
+          senders: [...senders.keys()]
+            .sort((a, b) => Number(b === this.session.userId) - Number(a === this.session.userId))
+            .map((s) => (s === this.session.userId ? 'You' : this.memberName(room, s))),
+        }))
         .filter((r) => r.count > 0);
+      if (edit?.unavailable) {
+        return {
+          ...m,
+          kind: 'unavailable' as const,
+          text: edit.text,
+          image: undefined,
+          media: undefined,
+          reactions,
+          replyTo: undefined,
+        };
+      }
       return {
         ...m,
+        poll: m.poll && this.tallyPoll(room, m.id, m.poll),
         text: edit?.text ?? m.text,
+        mentions: edit ? edit.mentions : m.mentions,
+        rich: edit ? edit.rich : m.rich,
         edited: !!edit,
         reactions,
         status: m.fromMe && m.status === 'sent' && m.ts <= room.othersReadTs ? 'read' : m.status,
@@ -739,6 +972,26 @@ export class MatrixBackend extends BaseBackend implements Backend {
       };
     });
     return room.built;
+  }
+
+  private tallyPoll(room: Room, pollId: string, poll: Poll): Poll {
+    const votes = [...(room.pollVotes.get(pollId) ?? new Map()).entries()]
+      // A vote over the limit is spoiled, as is one for options that don't exist.
+      .map(([voter, v]) => [voter, v.answers.slice(0, poll.maxSelections)] as const)
+      .filter(([, answers]) => answers.length > 0)
+      .sort(([a], [b]) => Number(b === this.session.userId) - Number(a === this.session.userId));
+    return {
+      ...poll,
+      totalVoters: votes.length,
+      options: poll.options.map((o) => {
+        const voters = votes.filter(([, answers]) => answers.includes(o.id)).map(([voter]) => voter);
+        return {
+          ...o,
+          mine: voters.includes(this.session.userId),
+          voters: voters.map((v) => (v === this.session.userId ? 'You' : this.memberName(room, v))),
+        };
+      }),
+    };
   }
 
   hasMoreHistory(chatId: string) {
@@ -777,7 +1030,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
 
   // ---------------------------------------------------------------- actions
 
-  async sendText(chatId: string, text: string, replyToId?: string) {
+  async sendText(chatId: string, text: string, replyToId?: string, mentions?: Member[]) {
     const room = this.rooms.get(chatId);
     if (!room) return;
     const txn = this.newTxn();
@@ -790,13 +1043,14 @@ export class MatrixBackend extends BaseBackend implements Backend {
       ts: Date.now(),
       kind: 'text',
       text,
+      mentions: mentions?.length ? mentions.map((m) => `@${m.name}`) : undefined,
       replyToId,
       status: 'sending',
     };
     room.pending.push(local);
     this.touch(chatId);
 
-    const content: any = { msgtype: 'm.text', body: text };
+    const content: any = { msgtype: 'm.text', body: text, ...mentionContent(text, mentions) };
     if (replyToId) content['m.relates_to'] = { 'm.in_reply_to': { event_id: replyToId } };
     try {
       await this.api('PUT', `/v3/rooms/${this.enc(chatId)}/send/m.room.message/${txn}`, content);
@@ -903,6 +1157,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
           [...byKey.entries()].map(([key, bySender]) => [key, [...bySender.entries()]]),
         ]),
         edits: [...r.edits.entries()],
+        pollVotes: [...r.pollVotes.entries()].map(([poll, byVoter]) => [poll, [...byVoter.entries()]]),
         prevBatch: trimmed ? undefined : r.prevBatch,
         hasMore: r.hasMore,
         trimmed: trimmed || r.trimmed,
@@ -941,6 +1196,7 @@ export class MatrixBackend extends BaseBackend implements Backend {
         for (const [key, bySender] of byKey)
           for (const [sender, eventId] of bySender) room.reactionIndex.set(eventId, [target, key, sender]);
       room.edits = new Map(c.edits);
+      room.pollVotes = new Map((c.pollVotes ?? []).map(([poll, byVoter]) => [poll, new Map(byVoter)]));
       Object.assign(room, {
         prevBatch: c.prevBatch,
         hasMore: c.hasMore,
@@ -971,6 +1227,73 @@ export class MatrixBackend extends BaseBackend implements Backend {
         thumbnail: m.media.thumbnail && { ...m.media.thumbnail, headers: h },
       },
     };
+  }
+
+  async editMessage(chatId: string, messageId: string, text: string) {
+    const room = this.rooms.get(chatId);
+    if (!room) return;
+    room.edits.set(messageId, { text, ts: Date.now() });
+    this.touch(chatId);
+    await this.api('PUT', `/v3/rooms/${this.enc(chatId)}/send/m.room.message/${this.newTxn()}`, {
+      msgtype: 'm.text',
+      body: `* ${text}`,
+      'm.new_content': { msgtype: 'm.text', body: text },
+      'm.relates_to': { rel_type: 'm.replace', event_id: messageId },
+    });
+  }
+
+  async deleteMessage(chatId: string, messageId: string) {
+    const room = this.rooms.get(chatId);
+    if (!room) return;
+    room.events = room.events.map((m) => (m.id === messageId ? deletedMessage(m) : m));
+    this.touch(chatId);
+    await this.api('PUT', `/v3/rooms/${this.enc(chatId)}/redact/${this.enc(messageId)}/${this.newTxn()}`, {});
+  }
+
+  async setTyping(chatId: string, typing: boolean) {
+    await this.api('PUT', `/v3/rooms/${this.enc(chatId)}/typing/${this.enc(this.session.userId)}`, {
+      typing,
+      ...(typing ? { timeout: 6000 } : {}),
+    }).catch(() => {});
+  }
+
+  private members = new Map<string, Promise<Member[]>>();
+
+  getMembers(chatId: string): Promise<Member[]> {
+    // Sync only loads members who've spoken recently, so ask for the full list (once per chat).
+    let list = this.members.get(chatId);
+    if (!list) {
+      list = this.api<{ joined: Record<string, { display_name?: string; avatar_url?: string }> }>(
+        'GET',
+        `/v3/rooms/${this.enc(chatId)}/joined_members`,
+      ).then(({ joined }) =>
+        Object.entries(joined)
+          .filter(([userId]) => userId !== this.session.userId && !networkFromBotUserId(userId))
+          .map(([userId, p]) => ({
+            userId,
+            name: withoutNetworkSuffix(p.display_name ?? userId.replace(/^@/, '').split(':')[0]),
+            avatar: this.mediaRef(p.avatar_url, 96),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      list.catch(() => this.members.delete(chatId));
+      this.members.set(chatId, list);
+    }
+    return list;
+  }
+
+  async votePoll(chatId: string, messageId: string, optionIds: string[]) {
+    const room = this.rooms.get(chatId);
+    if (!room) return;
+    // Show the vote straight away; the server echo replaces it.
+    let byVoter = room.pollVotes.get(messageId);
+    if (!byVoter) room.pollVotes.set(messageId, (byVoter = new Map()));
+    byVoter.set(this.session.userId, { answers: optionIds, ts: Date.now() });
+    this.touch(chatId);
+    await this.api('PUT', `/v3/rooms/${this.enc(chatId)}/send/${POLL_RESPONSE}/${this.newTxn()}`, {
+      'm.relates_to': { rel_type: 'm.reference', event_id: messageId },
+      [POLL_RESPONSE]: { answers: optionIds },
+    });
   }
 
   async react(chatId: string, messageId: string, key: string) {
@@ -1090,6 +1413,11 @@ export class MatrixBackend extends BaseBackend implements Backend {
       await this.sendText(roomId, 'login');
     }
     return roomId;
+  }
+
+  beginImport(network: NetworkId) {
+    const hasChats = [...this.chatCache.values()].some((c) => c.network === network && !c.isBridgeControl);
+    this.imports.begin(network, hasChats);
   }
 
   async disconnectNetwork(network: NetworkId) {

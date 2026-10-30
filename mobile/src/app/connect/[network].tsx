@@ -6,14 +6,13 @@ import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
-  Text,
-  TextInput,
   View,
   type KeyboardTypeOptions,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import QRCode from 'react-native-qrcode-svg';
 
+import { Text, TextInput } from '@/components/themed';
 import { CookieLogin } from '@/components/cookie-login';
 import { NetworkIcon } from '@/components/network-icon';
 import type { InputField, LoginFlow, LoginStep } from '@/lib/bridges';
@@ -30,9 +29,8 @@ type Phase =
   | { kind: 'done' }
   | { kind: 'error'; message: string };
 
-/** One bridge (Meta) serves both Instagram and Messenger; show each only its own flows. */
+/** The Meta bridge can also offer Instagram logins; Messenger shows only its own flows. */
 function flowsFor(network: NetworkId, flows: LoginFlow[]) {
-  if (network === 'instagram') return flows.filter((f) => f.id.includes('instagram'));
   if (network === 'messenger') return flows.filter((f) => !f.id.includes('instagram'));
   return flows;
 }
@@ -59,11 +57,15 @@ export default function Connect() {
     [],
   );
 
-  const advance = useCallback((step: LoginStep) => {
-    setValues(Object.fromEntries((step.user_input?.fields ?? []).map((f) => [f.id, f.default_value ?? ''])));
-    setManualCookies(false);
-    setPhase(step.type === 'complete' ? { kind: 'done' } : { kind: 'step', step });
-  }, []);
+  const advance = useCallback(
+    (step: LoginStep) => {
+      setValues(Object.fromEntries((step.user_input?.fields ?? []).map((f) => [f.id, f.default_value ?? ''])));
+      setManualCookies(false);
+      if (step.type === 'complete') backend.beginImport(network);
+      setPhase(step.type === 'complete' ? { kind: 'done' } : { kind: 'step', step });
+    },
+    [backend, network],
+  );
 
   const start = useCallback(
     async (flowId: string) => {
@@ -187,9 +189,10 @@ export default function Connect() {
         <View style={styles.center}>
           <Ionicons name="checkmark-circle" size={64} color={colors.success} />
           <Text style={[styles.message, { color: colors.text }]}>
-            {info.name} is connected. Your chats will appear in the inbox over the next few minutes as they sync.
+            {info.name} is connected. Your chats are being imported and will appear in your inbox together
+            when they&apos;re ready.
           </Text>
-          {button('Done', () => router.back())}
+          {button('Go to inbox', () => router.dismissTo('/'))}
         </View>
       );
       break;

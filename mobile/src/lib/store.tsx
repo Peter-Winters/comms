@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useColorScheme } from 'react-native';
 
-import { dark, light, type Palette } from '@/theme/colors';
+import type { Palette } from '@/theme/colors';
+import { makeTheme, type Theme } from '@/theme/themes';
 import type { Backend, BackendSnapshot } from './backends/backend';
 import { DemoBackend } from './backends/demo';
 import { MatrixBackend, type MatrixSession } from './backends/matrix';
@@ -124,6 +125,7 @@ const EMPTY_SNAPSHOT: BackendSnapshot = {
   displayName: '',
   chats: [],
   accounts: [],
+  importing: [],
 };
 const noopSubscribe = () => () => {};
 
@@ -152,13 +154,17 @@ export function useMessages(chatId: string): Message[] {
   return useSyncExternalStore(useSubscribe(), () => backend?.getMessages(chatId) ?? NO_MESSAGES);
 }
 
-export function useColors(): Palette {
+export function useTheme(): Theme {
   const scheme = useColorScheme();
   const { prefs } = useApp();
-  const mode = prefs.theme === 'system' ? (scheme === 'dark' ? 'dark' : 'light') : prefs.theme;
-  return mode === 'dark' ? dark : light;
+  const isDark = prefs.theme === 'system' ? scheme === 'dark' : prefs.theme === 'dark';
+  return useMemo(() => makeTheme(prefs.themeStyle, isDark), [prefs.themeStyle, isDark]);
+}
+
+export function useColors(): Palette {
+  return useTheme().colors;
 }
 
 export function useIsDark() {
-  return useColors() === dark;
+  return useTheme().dark;
 }

@@ -32,8 +32,13 @@ all as one inbox.
   Messenger, Instagram and Slack you log in on the service's own website inside the app, and Comms
   picks up the session.
 - **New chats:** pick a network and search your contacts, or type a phone number or username
-- **Rich messages:** photos, videos, files, and voice notes (sent and received), replies,
-  reactions, edits, read receipts, and full-screen media viewing
+- **Rich messages:** photos, videos, GIFs, files, contact cards and voice notes; formatting (bold,
+  italics, lists…), link previews, @mentions with suggestions, Instagram reel cards, and WhatsApp
+  polls you can vote in
+- **Conversation tools:** reply (tap a quote to jump to the original), react and see who reacted,
+  edit and delete your own messages, typing indicators, read receipts, and a chat info screen with
+  members and shared media
+- **Themes:** Classic, Minimal (text only) and Pager, each with day and night versions
 - **Push notifications**, with an option to keep message text off Google's and Expo's servers
 - **Instant start:** chats are cached on the phone, so the inbox appears immediately
 - Search across everything, light and dark themes, and a built-in demo mode

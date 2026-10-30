@@ -41,11 +41,11 @@ installed.
 | `signal` | Scan a QR code (Signal → Linked devices) |
 | `telegram` | Phone number and code. Needs `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` from https://my.telegram.org/apps |
 | `messenger` | Log in on messenger.com inside the app, or with username and password |
-| `gmessages` | Google Messages (SMS/RCS): scan a QR code in Messages → Device pairing |
+| `gmessages` | Text messages (SMS/RCS). Your phone must use the Google Messages app for texts. Scan a QR code in Messages → Device pairing |
 | `gvoice` | Google Voice |
 | `discord` | Older bridge type: you log in by chatting with the bridge bot instead of a native screen |
 | `slack`, `linkedin`, `twitter`, `bluesky` | Log in through the website or with a token |
-| `instagram` | **Experimental.** Current Meta bridge releases dropped Instagram, so this pins the last one that had it (v0.5.2, July 2025). It may break as Instagram changes. If this server previously ran a newer Meta bridge as `instagram`, drop its `instagram` database first. |
+| `instagram` | Log in with your username and password, or on instagram.com inside the app. Runs the dedicated Instagram bridge (`meta:ig-latest`). |
 
 ## Day to day
 

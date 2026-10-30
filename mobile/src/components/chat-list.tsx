@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useCallback, useState, type ReactElement } from 'react';
-import { FlatList, Platform, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Platform, StyleSheet, View } from 'react-native';
 
 import { NETWORKS } from '@/lib/networks';
 import { useApp, useBackend, useColors } from '@/lib/store';
@@ -9,6 +9,7 @@ import { isArchived, isUnread, type Chat } from '@/lib/types';
 import { ActionSheet, type SheetAction } from './action-sheet';
 import { Avatar } from './avatar';
 import { ChatRow } from './chat-row';
+import { Text } from './themed';
 
 export function openChat(id: string) {
   router.push({ pathname: '/chat/[id]', params: { id } });

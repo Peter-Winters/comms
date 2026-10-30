@@ -1,25 +1,30 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Text } from '@/components/themed';
 import { ChatList } from '@/components/chat-list';
 import { NetworkIcon } from '@/components/network-icon';
 import { NETWORKS } from '@/lib/networks';
-import { useColors, useSnapshot } from '@/lib/store';
+import { useSnapshot, useTheme } from '@/lib/store';
 import { isArchived, isUnread, sortChats, type NetworkId } from '@/lib/types';
 
 type Filter = 'all' | 'unread' | NetworkId;
 
 export default function Inbox() {
-  const colors = useColors();
+  const theme = useTheme();
+  const { colors } = theme;
+  const round = (n: number) => ({ borderRadius: n * theme.radius });
   const insets = useSafeAreaInsets();
-  const { chats, status, statusDetail } = useSnapshot();
+  const { chats, status, statusDetail, importing } = useSnapshot();
   const [filter, setFilter] = useState<Filter>('all');
 
   const { inbox, lowPriority, archived, networks } = useMemo(() => {
-    const real = chats.filter((c) => !c.isBridgeControl);
+    // A newly connected network's chats are held back until its import settles, then appear at once.
+    const held = new Set(importing.map((i) => i.network));
+    const real = chats.filter((c) => !c.isBridgeControl && !c.incomplete && !held.has(c.network));
     const active = real.filter((c) => !isArchived(c));
     const inbox = active.filter((c) => !c.lowPriority);
     return {
@@ -30,7 +35,7 @@ export default function Inbox() {
         (a, b) => NETWORKS[a].name.localeCompare(NETWORKS[b].name),
       ),
     };
-  }, [chats]);
+  }, [chats, importing]);
 
   const visible = useMemo(() => {
     const filtered = inbox.filter((c) =>
@@ -50,9 +55,10 @@ export default function Inbox() {
         onPress={() => setFilter(active && key !== 'all' ? 'all' : key)}
         style={[
           styles.chip,
+          round(18),
           { backgroundColor: active ? colors.text : colors.surface },
         ]}>
-        {network && <NetworkIcon network={network} size={18} />}
+        {network && theme.avatars && <NetworkIcon network={network} size={18} />}
         <Text style={[styles.chipText, { color: active ? colors.bg : colors.text }]}>{label}</Text>
       </Pressable>
     );
@@ -66,7 +72,7 @@ export default function Inbox() {
         {networks.map((n) => chip(n, NETWORKS[n].name, n))}
       </ScrollView>
       {status !== 'ready' && !(status === 'syncing' && chats.length > 0) && (
-        <View style={[styles.banner, { backgroundColor: colors.surface }]}>
+        <View style={[styles.banner, round(10), { backgroundColor: colors.surface }]}>
           <Ionicons
             name={status === 'error' || status === 'offline' ? 'cloud-offline-outline' : 'sync-outline'}
             size={16}
@@ -81,6 +87,22 @@ export default function Inbox() {
           </Text>
         </View>
       )}
+      {importing.map(({ network, found }) => (
+        <View key={network} style={[styles.importCard, round(14), { backgroundColor: colors.surface }]}>
+          <NetworkIcon network={network} size={40} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.importTitle, { color: colors.text }]}>
+              Importing your {NETWORKS[network].name} chats
+            </Text>
+            <Text style={[styles.importDetail, { color: colors.textMuted }]}>
+              {found > 0
+                ? `${found} chat${found === 1 ? '' : 's'} found. They'll appear here when it's done.`
+                : 'Waiting for your chats…'}
+            </Text>
+          </View>
+          <ActivityIndicator color={colors.accent} />
+        </View>
+      ))}
     </View>
   );
 
@@ -117,7 +139,17 @@ export default function Inbox() {
   return (
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: insets.top }]}>
       <View style={styles.topBar}>
-        <Text style={[styles.heading, { color: colors.text }]}>Inbox</Text>
+        <Text
+          style={[
+            styles.heading,
+            {
+              color: colors.text,
+              fontWeight: theme.headingWeight,
+              textTransform: theme.uppercaseHeadings ? 'uppercase' : 'none',
+            },
+          ]}>
+          Inbox
+        </Text>
         <Pressable hitSlop={8} onPress={() => router.push('/accounts')} style={styles.iconButton}>
           <Ionicons name="apps-outline" size={23} color={colors.text} />
         </Pressable>
@@ -127,7 +159,7 @@ export default function Inbox() {
       </View>
       <Pressable
         onPress={() => router.push('/search')}
-        style={[styles.search, { backgroundColor: colors.surface }]}>
+        style={[styles.search, round(12), { backgroundColor: colors.surface }]}>
         <Ionicons name="search" size={18} color={colors.textFaint} />
         <Text style={{ color: colors.textFaint, fontSize: 16 }}>Search chats and messages</Text>
       </Pressable>
@@ -139,7 +171,9 @@ export default function Inbox() {
         emptyText={
           filter === 'unread'
             ? "You're all caught up ✨"
-            : status === 'ready'
+            : importing.length > 0
+              ? ''
+              : status === 'ready'
               ? 'No chats yet. Connect an account to get started.'
               : 'Loading chats…'
         }
@@ -149,6 +183,7 @@ export default function Inbox() {
         onPress={() => router.push('/new-chat')}
         style={({ pressed }) => [
           styles.fab,
+          round(29),
           { backgroundColor: colors.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.85 : 1 },
         ]}>
         <Ionicons name="create-outline" size={26} color={colors.accentText} />
@@ -160,7 +195,7 @@ export default function Inbox() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, gap: 8 },
-  heading: { flex: 1, fontSize: 32, fontWeight: '800', letterSpacing: -0.5 },
+  heading: { flex: 1, fontSize: 32, letterSpacing: -0.5 },
   iconButton: { padding: 6 },
   search: {
     flexDirection: 'row',
@@ -170,7 +205,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 12,
   },
   chips: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   chip: {
@@ -179,7 +213,6 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 14,
     paddingVertical: 7,
-    borderRadius: 18,
   },
   chipText: { fontSize: 14, fontWeight: '600' },
   banner: {
@@ -189,15 +222,23 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 8,
     padding: 10,
-    borderRadius: 10,
   },
   bannerText: { flex: 1, fontSize: 13 },
+  importCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 14,
+  },
+  importTitle: { fontSize: 15, fontWeight: '600' },
+  importDetail: { fontSize: 13, marginTop: 2 },
   fab: {
     position: 'absolute',
     right: 20,
     width: 58,
     height: 58,
-    borderRadius: 29,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 6,

@@ -1,8 +1,9 @@
 import type { BridgeManager, BridgeStatus, Contact, LoginFlow, LoginStep } from '../bridges';
 import { previewText } from '../format';
 import { NETWORKS } from '../networks';
-import type { Account, Chat, ChatFlags, Message, NetworkId, OutgoingMedia, SearchResult } from '../types';
+import type { Account, Chat, ChatFlags, Member, Message, NetworkId, OutgoingMedia, SearchResult } from '../types';
 import { BaseBackend, type Backend, type BackendSnapshot } from './backend';
+import { ImportTracker } from './imports';
 
 const ME = '@me:demo';
 const MIN = 60_000;
@@ -149,6 +150,7 @@ export class DemoBackend extends BaseBackend implements Backend {
   private snapshot!: BackendSnapshot;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private olderLoaded = new Set<string>();
+  private imports = new ImportTracker(() => this.rebuild());
   readonly bridges: BridgeManager = new DemoBridges(this);
 
   constructor() {
@@ -184,6 +186,27 @@ export class DemoBackend extends BaseBackend implements Backend {
         archivedAt: s.archived ? now : undefined,
       });
     });
+    // A poll in the football group, so polls can be tried without a server.
+    const football = [...this.chats.values()].find((c) => c.title === 'Football Saturdays');
+    if (football) {
+      const question = 'Kick-off time this Saturday?';
+      const poll: Message = {
+        ...this.makeMessage(football.id, 'Dan', question, now - 200 * MIN),
+        kind: 'poll',
+        poll: {
+          question,
+          maxSelections: 1,
+          totalVoters: 3,
+          options: [
+            { id: '10', text: '10am', voters: ['Priya', 'Marcus'], mine: false },
+            { id: '11', text: '11am', voters: ['Leo'], mine: false },
+            { id: '12', text: 'Midday', voters: [], mine: false },
+          ],
+        },
+      };
+      this.messages.set(football.id, [...this.messages.get(football.id)!, poll].sort((a, b) => a.ts - b.ts));
+    }
+
     this.accounts = Object.values(NETWORKS)
       .filter((n) => n.id !== 'matrix')
       .map((n) => ({
@@ -192,6 +215,7 @@ export class DemoBackend extends BaseBackend implements Backend {
         available: true,
         label: connected.has(n.id) ? 'Demo account' : undefined,
       }));
+    this.imports.setBaseline(connected);
     this.rebuild('ready');
   }
 
@@ -218,6 +242,7 @@ export class DemoBackend extends BaseBackend implements Backend {
       displayName: 'You',
       chats: [...this.chats.values()],
       accounts: [...this.accounts],
+      importing: this.imports.list(),
     };
     this.emit();
   }
@@ -247,7 +272,13 @@ export class DemoBackend extends BaseBackend implements Backend {
       if (chat) {
         const people = this.participants.get(chat.id) ?? [chat.title];
         const who = people[Math.floor(Math.random() * people.length)];
-        this.append(chat.id, this.makeMessage(chat.id, who, pick(INCOMING), Date.now()), true);
+        this.setTypingIn(chat.id, [who]);
+        this.timers.push(
+          setTimeout(() => {
+            this.updateChat(chat.id, { typing: undefined });
+            this.append(chat.id, this.makeMessage(chat.id, who, pick(INCOMING), Date.now()), true);
+          }, 2500),
+        );
       }
       this.timers.push(setTimeout(tick, 30_000 + Math.random() * 30_000));
     };
@@ -257,6 +288,7 @@ export class DemoBackend extends BaseBackend implements Backend {
   stop() {
     this.timers.forEach(clearTimeout);
     this.timers = [];
+    this.imports.stop();
   }
 
   async logout() {
@@ -292,12 +324,14 @@ export class DemoBackend extends BaseBackend implements Backend {
     this.emit();
   }
 
-  async sendText(chatId: string, text: string, replyToId?: string) {
+  async sendText(chatId: string, text: string, replyToId?: string, mentions?: Member[]) {
     const msgs = this.messages.get(chatId) ?? [];
     const target = replyToId ? msgs.find((m) => m.id === replyToId) : undefined;
+    const used = mentions?.map((m) => `@${m.name}`).filter((t) => text.includes(t));
     const msg: Message = {
       ...this.makeMessage(chatId, 'me', text, Date.now()),
       status: 'sending',
+      mentions: used?.length ? used : undefined,
       replyTo: target && { id: target.id, senderName: target.senderName, text: target.text },
     };
     const chat = this.chats.get(chatId);
@@ -309,13 +343,56 @@ export class DemoBackend extends BaseBackend implements Backend {
 
     if (!chat) return;
     const people = this.participants.get(chatId) ?? [chat.title];
+    const who = pick(people);
+    const replyAt = 3500 + Math.random() * 3000;
     this.timers.push(
       setTimeout(() => this.patchMessage(chatId, msg.id, { status: 'read' }), 1500),
+      setTimeout(() => this.setTypingIn(chatId, [who]), replyAt - 2000),
       setTimeout(() => {
-        const reply = this.makeMessage(chatId, pick(people), pick(INCOMING), Date.now());
-        this.append(chatId, reply, true);
-      }, 3500 + Math.random() * 3000),
+        this.updateChat(chatId, { typing: undefined });
+        this.append(chatId, this.makeMessage(chatId, who, pick(INCOMING), Date.now()), true);
+      }, replyAt),
     );
+  }
+
+  private setTypingIn(chatId: string, names: string[]) {
+    this.updateChat(chatId, { typing: names.map((n) => n.split(' ')[0]) });
+    this.rebuild();
+  }
+
+  async editMessage(chatId: string, messageId: string, text: string) {
+    this.patchMessage(chatId, messageId, { text, edited: true, rich: undefined, mentions: undefined });
+    this.refreshPreview(chatId);
+  }
+
+  async deleteMessage(chatId: string, messageId: string) {
+    this.patchMessage(chatId, messageId, {
+      kind: 'deleted',
+      text: '',
+      edited: false,
+      reactions: [],
+      image: undefined,
+      media: undefined,
+      poll: undefined,
+      rich: undefined,
+      linkPreview: undefined,
+    });
+    this.refreshPreview(chatId);
+  }
+
+  /** Keeps the inbox preview in step when the newest message changes. */
+  private refreshPreview(chatId: string) {
+    const last = this.messages.get(chatId)?.at(-1);
+    if (last) this.updateChat(chatId, { lastMessage: preview(last) });
+    this.rebuild();
+  }
+
+  async setTyping() {}
+
+  async getMembers(chatId: string): Promise<Member[]> {
+    const chat = this.chats.get(chatId);
+    const people = this.participants.get(chatId) ?? (chat ? [chat.title] : []);
+    return people.map((name) => ({ userId: `@${name.replace(/\W/g, '').toLowerCase()}:demo`, name }));
   }
 
   private patchMessage(chatId: string, id: string, patch: Partial<Message>) {
@@ -325,6 +402,19 @@ export class DemoBackend extends BaseBackend implements Backend {
     this.emit();
   }
 
+  async votePoll(chatId: string, messageId: string, optionIds: string[]) {
+    const poll = this.messages.get(chatId)?.find((m) => m.id === messageId)?.poll;
+    if (!poll) return;
+    const hadVoted = poll.options.some((o) => o.mine);
+    const options = poll.options.map((o) => {
+      const mine = optionIds.includes(o.id);
+      const others = o.voters.filter((v) => v !== 'You');
+      return { ...o, mine, voters: mine ? ['You', ...others] : others };
+    });
+    const totalVoters = poll.totalVoters - Number(hadVoted) + Number(optionIds.length > 0);
+    this.patchMessage(chatId, messageId, { poll: { ...poll, options, totalVoters } });
+  }
+
   async react(chatId: string, messageId: string, key: string) {
     const msg = this.messages.get(chatId)?.find((m) => m.id === messageId);
     if (!msg) return;
@@ -332,12 +422,16 @@ export class DemoBackend extends BaseBackend implements Backend {
     let reactions: Message['reactions'];
     if (existing?.mine) {
       reactions = msg.reactions
-        .map((r) => (r.key === key ? { ...r, count: r.count - 1, mine: false } : r))
+        .map((r) =>
+          r.key === key ? { ...r, count: r.count - 1, mine: false, senders: r.senders.filter((s) => s !== 'You') } : r,
+        )
         .filter((r) => r.count > 0);
     } else if (existing) {
-      reactions = msg.reactions.map((r) => (r.key === key ? { ...r, count: r.count + 1, mine: true } : r));
+      reactions = msg.reactions.map((r) =>
+        r.key === key ? { ...r, count: r.count + 1, mine: true, senders: ['You', ...r.senders] } : r,
+      );
     } else {
-      reactions = [...msg.reactions, { key, count: 1, mine: true }];
+      reactions = [...msg.reactions, { key, count: 1, mine: true, senders: ['You'] }];
     }
     this.patchMessage(chatId, messageId, { reactions });
   }
@@ -423,8 +517,45 @@ export class DemoBackend extends BaseBackend implements Backend {
     this.accounts = this.accounts.map((a) =>
       a.network === network ? { ...a, connected: true, label: 'Demo account' } : a,
     );
+    if (![...this.chats.values()].some((c) => c.network === network)) this.simulateBridgeImport(network);
     this.rebuild();
     return undefined;
+  }
+
+  beginImport(network: NetworkId) {
+    const hasChats = [...this.chats.values()].some((c) => c.network === network && !c.incomplete);
+    this.imports.begin(network, hasChats);
+  }
+
+  /** Mimics a real bridge: chats appear nameless one at a time, then get names and history. */
+  private simulateBridgeImport(network: NetworkId) {
+    const now = Date.now();
+    DEMO_CONTACTS.slice(0, 10).forEach((name, i) => {
+      const id = nextId(`demo-${network}`);
+      this.timers.push(
+        setTimeout(() => {
+          this.chats.set(id, {
+            id, network, title: 'Empty chat', incomplete: true, isGroup: false, lastActivity: now,
+            unreadCount: 0, markedUnread: false, pinned: false, muted: false, lowPriority: false,
+          });
+          this.participants.set(id, [name]);
+          this.messages.set(id, []);
+          this.importActivity(network);
+        }, 1500 + i * 700),
+        setTimeout(() => {
+          const msg = this.makeMessage(id, name, `Hey, it's ${name.split(' ')[0]}!`, now - (i + 1) * 47 * MIN);
+          this.messages.set(id, [msg]);
+          this.updateChat(id, { title: name, incomplete: false, lastMessage: preview(msg), lastActivity: msg.ts });
+          this.importActivity(network);
+        }, 2500 + i * 700),
+      );
+    });
+  }
+
+  private importActivity(network: NetworkId) {
+    const found = [...this.chats.values()].filter((c) => c.network === network && !c.incomplete).length;
+    this.imports.activity(network, found);
+    this.rebuild();
   }
 
   async disconnectNetwork(network: NetworkId) {
@@ -439,7 +570,7 @@ export class DemoBackend extends BaseBackend implements Backend {
 const EMPTY: Message[] = [];
 
 function preview(m: Message) {
-  return { text: previewText(m.kind, m.text, m.media), ts: m.ts, senderName: m.senderName, fromMe: m.fromMe };
+  return { text: previewText(m.kind, m.text, m.media, m.share), ts: m.ts, senderName: m.senderName, fromMe: m.fromMe };
 }
 
 const DEMO_CONTACTS = [
