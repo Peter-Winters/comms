@@ -1,0 +1,52 @@
+# Every push to main reaches the testers' phones:
+#  - JavaScript-only changes ship as an over-the-air update (about a minute, no reinstall).
+#  - Changes to native code (new native modules, permissions, app.json) build a new preview APK.
+# The fingerprint decides which: it hashes everything that ends up in the native app.
+name: Deploy preview
+
+on:
+  push:
+    branches: ['main']
+
+jobs:
+  checks:
+    name: Typecheck, lint, tests
+    type: custom
+    steps:
+      - uses: eas/checkout
+      - uses: eas/install_node_modules
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test -- --ci
+
+  fingerprint:
+    name: Fingerprint
+    needs: [checks]
+    type: fingerprint
+    environment: preview
+
+  get_build:
+    name: Find a build with this fingerprint
+    needs: [fingerprint]
+    type: get-build
+    params:
+      fingerprint_hash: ${{ needs.fingerprint.outputs.android_fingerprint_hash }}
+      profile: preview
+
+  build:
+    name: Build preview APK
+    needs: [get_build]
+    if: ${{ !needs.get_build.outputs.build_id }}
+    type: build
+    params:
+      platform: android
+      profile: preview
+
+  update:
+    name: Publish over-the-air update
+    needs: [get_build]
+    if: ${{ needs.get_build.outputs.build_id }}
+    type: update
+    params:
+      branch: preview
+      platform: android

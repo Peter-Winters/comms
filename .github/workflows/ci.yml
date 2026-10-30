@@ -1,0 +1,53 @@
+# Checks every pull request and every push to main. Deploys are handled by EAS Workflows
+# (mobile/.eas/workflows), which repeat these checks before shipping anything.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile:
+    name: App (typecheck, lint, tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test -- --ci
+
+  server:
+    name: Server (scripts and compose file)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - name: Scripts parse
+        run: node --check setup.mjs && node --check pushgateway/gateway.mjs
+      - name: Compose file is valid for every bridge
+        run: |
+          cp .env.example .env
+          COMPOSE_PROFILES=whatsapp,signal,telegram,messenger,instagram,gmessages,gvoice,discord,slack,linkedin,twitter,bluesky \
+            docker compose config --quiet
