@@ -1,15 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import ReanimatedSwipeable, {
   SwipeDirection,
   type SwipeableMethods,
 } from 'react-native-gesture-handler/ReanimatedSwipeable';
 
-import { formatInboxTime } from '@/lib/format';
-import { useColors } from '@/lib/store';
+import { formatInboxTime, typingText } from '@/lib/format';
+import { useTheme } from '@/lib/store';
 import { isArchived, isUnread, type Chat } from '@/lib/types';
 import { Avatar } from './avatar';
+import { Text } from './themed';
 
 type Props = {
   chat: Chat;
@@ -28,7 +29,7 @@ export const ChatRow = memo(function ChatRow({
   onToggleRead,
   onToggleArchive,
 }: Props) {
-  const colors = useColors();
+  const { colors, radius } = useTheme();
   const swipeRef = useRef<SwipeableMethods>(null);
   const unread = isUnread(chat);
   const archived = isArchived(chat);
@@ -49,12 +50,12 @@ export const ChatRow = memo(function ChatRow({
       overshootFriction={8}
       renderLeftActions={() => (
         <View style={[styles.swipeAction, styles.swipeLeft, { backgroundColor: colors.accent }]}>
-          <Ionicons name={unread ? 'mail-open-outline' : 'mail-unread-outline'} size={24} color="#fff" />
+          <Ionicons name={unread ? 'mail-open-outline' : 'mail-unread-outline'} size={24} color={colors.accentText} />
         </View>
       )}
       renderRightActions={() => (
         <View style={[styles.swipeAction, styles.swipeRight, { backgroundColor: colors.success }]}>
-          <Ionicons name={archived ? 'arrow-undo-outline' : 'checkmark-done'} size={24} color="#fff" />
+          <Ionicons name={archived ? 'arrow-undo-outline' : 'checkmark-done'} size={24} color={colors.accentText} />
         </View>
       )}
       onSwipeableOpen={(direction) => {
@@ -89,8 +90,19 @@ export const ChatRow = memo(function ChatRow({
           <View style={styles.line}>
             <Text
               numberOfLines={2}
-              style={[styles.preview, { color: unread ? colors.text : colors.textMuted }]}>
-              {showPreview ? preview : unread ? 'New messages' : ''}
+              style={[
+                styles.preview,
+                { color: chat.typing ? colors.accent : unread ? colors.text : colors.textMuted },
+              ]}>
+              {chat.typing
+                ? chat.isGroup
+                  ? typingText(chat.typing)
+                  : 'typing…'
+                : showPreview
+                  ? preview
+                  : unread
+                    ? 'New messages'
+                    : ''}
             </Text>
             {unread && (
               <View
@@ -98,9 +110,10 @@ export const ChatRow = memo(function ChatRow({
                   styles.badge,
                   { backgroundColor: chat.muted ? colors.badgeMuted : colors.accent },
                   chat.unreadCount === 0 && styles.dot,
+                  radius === 0 && { borderRadius: 0 },
                 ]}>
                 {chat.unreadCount > 0 && (
-                  <Text style={styles.badgeText}>{chat.unreadCount > 99 ? '99+' : chat.unreadCount}</Text>
+                  <Text style={[styles.badgeText, { color: colors.accentText }]}>{chat.unreadCount > 99 ? '99+' : chat.unreadCount}</Text>
                 )}
               </View>
             )}
@@ -127,7 +140,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   dot: { minWidth: 12, width: 12, height: 12, borderRadius: 6, paddingHorizontal: 0 },
-  badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  badgeText: { fontSize: 12, fontWeight: '700' },
   swipeAction: { width: 96, justifyContent: 'center' },
   swipeLeft: { alignItems: 'flex-start', paddingLeft: 32 },
   swipeRight: { alignItems: 'flex-end', paddingRight: 32 },

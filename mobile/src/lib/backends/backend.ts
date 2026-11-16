@@ -4,8 +4,10 @@ import type {
   BackendStatus,
   Chat,
   ChatFlags,
+  Member,
   Message,
   NetworkId,
+  NetworkImport,
   OutgoingMedia,
   SearchResult,
 } from '../types';
@@ -17,7 +19,16 @@ export type BackendSnapshot = {
   displayName: string;
   chats: Chat[];
   accounts: Account[];
+  /** Networks whose chats are still being imported. Their chats stay out of the inbox until done. */
+  importing: NetworkImport[];
 };
+
+/** How long a network's import must be quiet (no new chats or messages) before it's shown as done. */
+export const IMPORT_QUIET_MS = 12_000;
+/** Imports are shown as done after this long regardless, so a busy account doesn't hide forever. */
+export const IMPORT_MAX_MS = 5 * 60_000;
+/** A login that produces no chats at all (an empty account) stops waiting after this long. */
+export const IMPORT_EMPTY_MS = 90_000;
 
 /**
  * A source of chats. The UI only talks to this interface, so the demo backend and the
@@ -36,9 +47,18 @@ export interface Backend {
   hasMoreHistory(chatId: string): boolean;
   loadOlder(chatId: string): Promise<void>;
 
-  sendText(chatId: string, text: string, replyToId?: string): Promise<void>;
+  sendText(chatId: string, text: string, replyToId?: string, mentions?: Member[]): Promise<void>;
+  /** Replaces the text of one of your messages. */
+  editMessage(chatId: string, messageId: string, text: string): Promise<void>;
+  /** Deletes one of your messages for everyone. */
+  deleteMessage(chatId: string, messageId: string): Promise<void>;
+  setTyping(chatId: string, typing: boolean): Promise<void>;
+  /** People in the chat other than you and bridge bots. */
+  getMembers(chatId: string): Promise<Member[]>;
   sendMedia(chatId: string, media: OutgoingMedia): Promise<void>;
   react(chatId: string, messageId: string, key: string): Promise<void>;
+  /** Replaces your vote on a poll; an empty list withdraws it. */
+  votePoll(chatId: string, messageId: string, optionIds: string[]): Promise<void>;
   markRead(chatId: string): Promise<void>;
   setFlags(chatId: string, flags: ChatFlags): Promise<void>;
   search(query: string): Promise<SearchResult[]>;
@@ -47,6 +67,8 @@ export interface Backend {
   connectNetwork(network: NetworkId): Promise<string | undefined>;
   /** Disconnects a network, or resolves to the chat where the user can manage the connection. */
   disconnectNetwork(network: NetworkId): Promise<string | undefined>;
+  /** A login just finished: treat the network's incoming chats as an import (unless it already has chats). */
+  beginImport(network: NetworkId): void;
 
   readonly bridges: BridgeManager;
 

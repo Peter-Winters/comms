@@ -239,6 +239,10 @@ for (const name of enabled) {
   if (provisioning) doc.setIn(['provisioning', 'allow_matrix_auth'], true);
   bridgeInfo[name] = { port, provisioning };
 
+  if (name === 'whatsapp') {
+    // Prefer the name saved in your contacts, and drop the default " (WA)" suffix: the app shows a network badge.
+    doc.setIn(['network', 'displayname_template'], '{{or .FullName .BusinessName .PushName .Phone .RedactedPhone "Unknown user"}}');
+  }
   if (name === 'telegram') {
     doc.setIn(['network', 'api_id'], Number(env.TELEGRAM_API_ID));
     doc.setIn(['network', 'api_hash'], env.TELEGRAM_API_HASH);

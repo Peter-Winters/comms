@@ -1,4 +1,4 @@
-import type { MediaInfo, MessageKind } from './types';
+import type { MediaInfo, MessageKind, SharedPost } from './types';
 
 const DAY = 86_400_000;
 
@@ -54,17 +54,58 @@ export function colorFor(seed: string) {
 }
 
 /** One-line summary of a message for the inbox. */
-export function previewText(kind: MessageKind, text: string, media?: MediaInfo) {
+export function previewText(kind: MessageKind, text: string, media?: MediaInfo, share?: SharedPost) {
+  if (share) return text ? `🎬 ${share.label}: ${text}` : `🎬 ${share.label}`;
   switch (kind) {
+    case 'poll':
+      return `📊 ${text}`;
+    case 'deleted':
+      return '🚫 Message deleted';
+    case 'unavailable':
+      return `⚠️ ${text.split('\n')[0]}`;
     case 'image':
       return text ? `📷 ${text}` : '📷 Photo';
     case 'video':
+      if (media?.gif) return '🎞️ GIF';
       return text ? `🎥 ${text}` : '🎥 Video';
     case 'audio':
       return media?.voice ? '🎤 Voice message' : '🎵 Audio';
     case 'file':
+      if (media?.contact) return `👤 ${contactName(media.name)}`;
       return `📎 ${media?.name ?? 'File'}`;
     default:
       return text;
   }
+}
+
+const SHARE_RE = /^https?:\/\/(?:www\.|m\.)?(?:instagram|facebook)\.com\/(reels?|p|tv|stories|share\/r)\//i;
+
+/** Recognises a link to an Instagram or Facebook reel, post or story. */
+export function sharedPostFrom(url: unknown): SharedPost | undefined {
+  if (typeof url !== 'string') return undefined;
+  const kind = url.match(SHARE_RE)?.[1]?.toLowerCase();
+  if (!kind) return undefined;
+  const label = kind === 'p' ? 'Post' : kind === 'stories' ? 'Story' : 'Reel';
+  // Drop Instagram's tracking parameters.
+  return { url: url.split('?')[0], label };
+}
+
+/** Removes links (bare or Markdown) from a caption, leaving any words someone actually wrote. */
+export function stripLinks(text: string) {
+  return text
+    .replace(/\[[^\]]*\]\(https?:\/\/[^)]*\)/g, '')
+    .replace(/https?:\/\/\S+/g, '')
+    .trim();
+}
+
+/** "Zack.vcf" → "Zack". */
+export function contactName(fileName?: string) {
+  return fileName?.replace(/\.vcf$/i, '') || 'Contact';
+}
+
+/** "Dan is typing…", "Dan and Priya are typing…", "3 people are typing…". */
+export function typingText(names: string[]) {
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  return `${names.length} people are typing…`;
 }

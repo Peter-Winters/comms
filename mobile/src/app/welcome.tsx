@@ -1,7 +1,8 @@
 import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text } from '@/components/themed';
 import { NetworkIcon } from '@/components/network-icon';
 import { CONNECTABLE_NETWORKS } from '@/lib/networks';
 import { useApp, useColors } from '@/lib/store';

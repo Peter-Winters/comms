@@ -22,7 +22,7 @@ export default function Folder() {
   const { chats } = useSnapshot();
 
   const visible = useMemo(() => {
-    const real = chats.filter((c) => !c.isBridgeControl);
+    const real = chats.filter((c) => !c.isBridgeControl && !c.incomplete);
     const matching =
       name === 'low-priority' ? real.filter((c) => c.lowPriority && !isArchived(c)) : real.filter(isArchived);
     return sortChats(matching);

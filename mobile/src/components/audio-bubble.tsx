@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { formatDuration } from '@/lib/media';
 import type { MediaInfo } from '@/lib/types';
+import { Text } from './themed';
 
 type Props = { media: MediaInfo; color: string; trackColor: string };
 

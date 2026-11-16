@@ -1,0 +1,59 @@
+# Releases to Google Play when a version tag is pushed (e.g. `git tag v1.1.0 && git push --tags`).
+#  - Native changes: build a signed app bundle and submit it to the Play internal testing track.
+#  - JavaScript-only changes: publish an over-the-air update to installed production apps.
+# Promote from internal testing to closed/open testing and production in the Play Console.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  checks:
+    name: Typecheck, lint, tests
+    type: custom
+    steps:
+      - uses: eas/checkout
+      - uses: eas/install_node_modules
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test -- --ci
+
+  fingerprint:
+    name: Fingerprint
+    needs: [checks]
+    type: fingerprint
+    environment: production
+
+  get_build:
+    name: Find a build with this fingerprint
+    needs: [fingerprint]
+    type: get-build
+    params:
+      fingerprint_hash: ${{ needs.fingerprint.outputs.android_fingerprint_hash }}
+      profile: production
+
+  build:
+    name: Build Play Store bundle
+    needs: [get_build]
+    if: ${{ !needs.get_build.outputs.build_id }}
+    type: build
+    params:
+      platform: android
+      profile: production
+
+  submit:
+    name: Submit to Play internal testing
+    needs: [build]
+    type: submit
+    params:
+      build_id: ${{ needs.build.outputs.build_id }}
+
+  update:
+    name: Publish over-the-air update
+    needs: [get_build]
+    if: ${{ needs.get_build.outputs.build_id }}
+    type: update
+    params:
+      branch: production
+      platform: android

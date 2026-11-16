@@ -48,9 +48,14 @@ export type Chat = {
   /** Management room with a bridge bot rather than a real conversation. */
   isBridgeControl?: boolean;
   encrypted?: boolean;
+  /** A bridged chat whose name and messages haven't arrived yet; kept out of the inbox. */
+  incomplete?: boolean;
+  /** Names of people typing right now. */
+  typing?: string[];
 };
 
-export type Reaction = { key: string; count: number; mine: boolean };
+/** `senders` are display names, with "You" first if you reacted. */
+export type Reaction = { key: string; count: number; mine: boolean; senders: string[] };
 
 export type MessageKind =
   | 'text'
@@ -61,6 +66,10 @@ export type MessageKind =
   | 'audio'
   | 'file'
   | 'system'
+  | 'poll'
+  | 'deleted'
+  /** A photo or video the bridge couldn't fetch (e.g. no longer on the phone). */
+  | 'unavailable'
   | 'encrypted';
 
 export type MediaInfo = {
@@ -74,6 +83,10 @@ export type MediaInfo = {
   width?: number;
   height?: number;
   voice?: boolean;
+  /** A looping, silent clip that plays by itself (GIFs are sent as short videos). */
+  gif?: boolean;
+  /** A contact card (.vcf). */
+  contact?: boolean;
   thumbnail?: ImageRef;
 };
 
@@ -90,6 +103,42 @@ export type OutgoingMedia = {
   voice?: boolean;
 };
 
+/** A run of text with one set of formatting. `mention` runs read "@Name". */
+export type RichSpan = {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  code?: boolean;
+  quote?: boolean;
+  href?: string;
+  mention?: boolean;
+};
+
+export type LinkPreview = { url: string; title?: string; description?: string; image?: ImageRef; site: string };
+
+/** Someone who can be @mentioned. */
+export type Member = { userId: string; name: string; avatar?: ImageRef };
+
+export type SharedPost = { url: string; label: 'Reel' | 'Post' | 'Story' };
+
+export type PollOption = {
+  id: string;
+  text: string;
+  /** Display names of everyone who picked this option ("You" first). */
+  voters: string[];
+  mine: boolean;
+};
+
+export type Poll = {
+  question: string;
+  options: PollOption[];
+  /** How many options one person may pick. */
+  maxSelections: number;
+  /** People who have voted at all. */
+  totalVoters: number;
+};
+
 export type Message = {
   id: string;
   chatId: string;
@@ -102,6 +151,15 @@ export type Message = {
   image?: ImageRef;
   /** Set for video, audio and file messages. */
   media?: MediaInfo;
+  /** A shared Instagram/Facebook reel, post or story; the image or video is its preview. */
+  share?: SharedPost;
+  /** "@Name" tokens in `text` that mention someone, for highlighting. */
+  mentions?: string[];
+  /** Set when kind is 'poll'. */
+  poll?: Poll;
+  /** Formatted text (bold, lists, links…), when the message has any formatting. */
+  rich?: RichSpan[];
+  linkPreview?: LinkPreview;
   replyTo?: { id: string; senderName: string; text: string };
   reactions: Reaction[];
   status?: 'sending' | 'sent' | 'read' | 'failed';
@@ -128,6 +186,9 @@ export type SearchResult =
   | { type: 'message'; chat: Chat; message: Message };
 
 export type BackendStatus = 'starting' | 'syncing' | 'ready' | 'offline' | 'error';
+
+/** A newly connected network whose chats are still arriving. */
+export type NetworkImport = { network: NetworkId; found: number };
 
 export function isArchived(chat: Chat): boolean {
   return chat.archivedAt !== undefined && chat.archivedAt >= chat.lastActivity;

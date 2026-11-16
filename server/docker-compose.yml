@@ -80,11 +80,10 @@ services:
     profiles: [messenger]
     volumes: [./data/messenger:/data]
 
-  # Experimental: current Meta bridge releases dropped Instagram, so this pins the last
-  # release that supports it (July 2025). It may stop working as Instagram changes.
+  # Instagram has its own bridge (mautrix-instagram), published under the meta image with an ig- tag.
   instagram:
     <<: *bridge
-    image: dock.mau.dev/mautrix/meta:v0.5.2
+    image: dock.mau.dev/mautrix/meta:ig-latest
     profiles: [instagram]
     volumes: [./data/instagram:/data]
 

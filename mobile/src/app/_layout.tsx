@@ -1,3 +1,4 @@
+import { useFonts, VT323_400Regular } from '@expo-google-fonts/vt323';
 import * as Notifications from 'expo-notifications';
 import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -8,7 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { roomIdFromResponse } from '@/lib/push';
-import { AppProvider, useApp, useColors, useIsDark } from '@/lib/store';
+import { AppProvider, useApp, useTheme } from '@/lib/store';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,9 +44,12 @@ function useNotificationRouting(enabled: boolean) {
 }
 
 function Navigator() {
-  const { loaded, backend } = useApp();
-  const colors = useColors();
-  const dark = useIsDark();
+  const { loaded: prefsLoaded, backend } = useApp();
+  // Only the Pager theme uses this font; a failed load just falls back to the system font.
+  const [fontsLoaded, fontError] = useFonts({ VT323_400Regular });
+  const loaded = prefsLoaded && (fontsLoaded || !!fontError);
+  const theme = useTheme();
+  const { colors, dark } = theme;
 
   useEffect(() => {
     if (loaded) SplashScreen.hideAsync();
@@ -76,12 +80,16 @@ function Navigator() {
           headerShadowVisible: false,
           headerStyle: { backgroundColor: colors.bg },
           headerTintColor: colors.text,
+          headerTitleStyle: theme.font
+            ? { fontFamily: theme.font.family, fontSize: 17 * theme.font.scale, fontWeight: 'normal' }
+            : undefined,
           headerBackButtonDisplayMode: 'minimal',
           contentStyle: { backgroundColor: colors.bg },
         }}>
         <Stack.Protected guard={!!backend}>
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="chat/[id]" />
+          <Stack.Screen name="chat-info/[id]" options={{ title: '' }} />
           <Stack.Screen name="folder/[name]" />
           <Stack.Screen name="search" options={{ headerShown: false, animation: 'fade' }} />
           <Stack.Screen name="new-chat" options={{ title: 'New chat', presentation: 'modal' }} />
