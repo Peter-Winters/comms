@@ -1,0 +1,14 @@
+# Production add-on for a public server with a domain (set PUBLIC_HOST in .env).
+# Enable it with COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml in .env.
+# Caddy serves HTTPS on 443 and gets and renews its certificates itself.
+
+services:
+  caddy:
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./data/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
