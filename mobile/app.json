@@ -65,15 +65,7 @@
         }
       ],
       "expo-video",
-      "expo-sharing",
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "usesCleartextTraffic": true
-          }
-        }
-      ]
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

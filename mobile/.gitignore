@@ -41,3 +41,6 @@ example
 # generated native folders
 /ios
 /android
+
+# Firebase config: provided to EAS builds as a file secret, not committed
+google-services.json

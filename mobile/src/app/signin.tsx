@@ -13,10 +13,12 @@ import { Text, TextInput } from '@/components/themed';
 import { matrixLogin } from '@/lib/backends/matrix';
 import { useApp, useColors } from '@/lib/store';
 
+const DEFAULT_HOMESERVER = 'https://matrix.usecomms.app';
+
 export default function SignIn() {
   const colors = useColors();
   const { signInMatrix } = useApp();
-  const [homeserver, setHomeserver] = useState('');
+  const [homeserver, setHomeserver] = useState(DEFAULT_HOMESERVER);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -42,16 +44,15 @@ export default function SignIn() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <Text style={[styles.intro, { color: colors.textMuted }]}>
-          Sign in to the Matrix homeserver that runs your bridges. On your local network this is usually
-          something like http://192.168.1.20:8008.
+          Sign in to your Comms account. To use your own server instead, change the server address.
         </Text>
 
-        <Field label="Homeserver URL" colors={colors}>
+        <Field label="Server" colors={colors}>
           <TextInput
             style={input}
             value={homeserver}
             onChangeText={setHomeserver}
-            placeholder="http://192.168.1.20:8008"
+            placeholder={DEFAULT_HOMESERVER}
             placeholderTextColor={colors.textFaint}
             autoCapitalize="none"
             autoCorrect={false}
