@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router, useFocusEffect } from 'expo-router';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -28,6 +28,7 @@ export default function Accounts() {
   const backend = useBackend();
   const colors = useColors();
   const { accounts } = useSnapshot();
+  const { welcome } = useLocalSearchParams<{ welcome?: string }>();
   const [logins, setLogins] = useState<Logins>({});
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<NetworkId | null>(null);
@@ -199,9 +200,21 @@ export default function Accounts() {
           }}
         />
       }>
+      {welcome === '1' && (
+        <>
+          <Stack.Screen options={{ title: 'Connect your apps' }} />
+          <View style={[styles.welcome, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.welcomeTitle, { color: colors.text }]}>Welcome to Comms</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 15, lineHeight: 21 }}>
+              Connect the chat apps you use and their messages come together in one inbox. Start with one: you can
+              add more any time from the grid icon at the top of your inbox.
+            </Text>
+          </View>
+        </>
+      )}
       {section('Connected', connected)}
       {section('Add an account', available)}
-      {section('Unavailable', unavailable, 'Enable these bridges in server/.env and re-run setup to use them.')}
+      {section('Unavailable', unavailable, 'Not available on this server yet.')}
     </ScrollView>
   );
 }
@@ -218,6 +231,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   note: { fontSize: 13, paddingHorizontal: 16, marginBottom: 6 },
+  welcome: { margin: 16, marginBottom: 0, padding: 16, borderRadius: 14, gap: 6 },
+  welcomeTitle: { fontSize: 18, fontWeight: '700' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,18 +8,36 @@ import { Text } from '@/components/themed';
 import { ChatList } from '@/components/chat-list';
 import { NetworkIcon } from '@/components/network-icon';
 import { NETWORKS } from '@/lib/networks';
-import { useSnapshot, useTheme } from '@/lib/store';
+import { useBackend, useSnapshot, useTheme } from '@/lib/store';
 import { isArchived, isUnread, sortChats, type NetworkId } from '@/lib/types';
 
 type Filter = 'all' | 'unread' | NetworkId;
+
+/** Accounts opens by itself at most once per app launch. */
+let connectionsPrompted = false;
 
 export default function Inbox() {
   const theme = useTheme();
   const { colors } = theme;
   const round = (n: number) => ({ borderRadius: n * theme.radius });
   const insets = useSafeAreaInsets();
-  const { chats, status, statusDetail, importing } = useSnapshot();
+  const { chats, status, statusDetail, importing, accounts } = useSnapshot();
   const [filter, setFilter] = useState<Filter>('all');
+  const backend = useBackend();
+
+  // With nothing connected yet (first open, typically), go straight to connecting an app.
+  const connectable = accounts
+    .filter((a) => a.available && backend.bridges.supports(a.network))
+    .map((a) => a.network)
+    .join(',');
+  useEffect(() => {
+    if (connectionsPrompted || backend.kind === 'demo' || !connectable) return;
+    connectionsPrompted = true;
+    const networks = connectable.split(',') as NetworkId[];
+    Promise.all(networks.map((n) => backend.bridges.status(n).then((s) => s.logins.length, () => -1))).then((counts) => {
+      if (counts.every((c) => c === 0)) router.push({ pathname: '/accounts', params: { welcome: '1' } });
+    });
+  }, [backend, connectable]);
 
   const { inbox, lowPriority, archived, networks } = useMemo(() => {
     // A newly connected network's chats are held back until its import settles, then appear at once.
