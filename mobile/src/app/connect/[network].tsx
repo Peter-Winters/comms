@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  Linking,
   Pressable,
   StyleSheet,
   View,
@@ -16,8 +17,10 @@ import QRCode from 'react-native-qrcode-svg';
 import { Text, TextInput } from '@/components/themed';
 import { CookieLogin } from '@/components/cookie-login';
 import { NetworkIcon } from '@/components/network-icon';
+import { PhoneInput } from '@/components/phone-input';
 import { ProvisioningError } from '@/lib/backends/matrix-bridges';
 import type { InputField, LoginFlow, LoginStep } from '@/lib/bridges';
+import { pairingHelp, phoneHelp } from '@/lib/connect-help';
 import { NETWORKS } from '@/lib/networks';
 import { useBackend, useColors } from '@/lib/store';
 import type { NetworkId } from '@/lib/types';
@@ -164,7 +167,12 @@ export default function Connect() {
   const field = (f: InputField, onChange: (v: string) => void, value: string) => (
     <View key={f.id} style={styles.field}>
       <Text style={[styles.label, { color: colors.textMuted }]}>{f.name}</Text>
-      {f.options?.length ? (
+      {f.type === 'phone_number' && !!phoneHelp(network) && (
+        <Text style={{ color: colors.textMuted, fontSize: 14, lineHeight: 20 }}>{phoneHelp(network)}</Text>
+      )}
+      {f.type === 'phone_number' && !f.options?.length ? (
+        <PhoneInput onChange={onChange} />
+      ) : f.options?.length ? (
         <View style={styles.options}>
           {f.options.map((o) => (
             <Pressable
@@ -264,6 +272,7 @@ export default function Connect() {
         );
       } else if (s.type === 'display_and_wait') {
         const d = s.display_and_wait!;
+        const help = pairingHelp(network, d.type);
         body = (
           <View style={[styles.center, { gap: 20 }]}>
             {instructions}
@@ -281,6 +290,24 @@ export default function Connect() {
               </Pressable>
             )}
             {d.type === 'emoji' && d.data && <Text style={{ fontSize: 64 }}>{d.data}</Text>}
+            {help && (
+              <View style={[styles.helpBox, { backgroundColor: colors.surface }]}>
+                {help.steps.map((text, i) => (
+                  <View key={i} style={styles.helpStep}>
+                    <Text style={[styles.helpNumber, { color: colors.accentText, backgroundColor: colors.accent }]}>
+                      {i + 1}
+                    </Text>
+                    <Text style={[styles.helpText, { color: colors.text }]}>{text}</Text>
+                  </View>
+                ))}
+                {!!help.note && <Text style={[styles.help, { color: colors.textMuted }]}>{help.note}</Text>}
+              </View>
+            )}
+            {help?.open &&
+              button(help.open.label, async () => {
+                if (d.type === 'code' && d.data) await Clipboard.setStringAsync(d.data);
+                Linking.openURL(help.open!.url).catch(() => {});
+              })}
             <View style={styles.waiting}>
               <ActivityIndicator color={colors.textMuted} />
               <Text style={{ color: colors.textMuted }}>Waiting for you to confirm on your phone…</Text>
@@ -350,6 +377,19 @@ const styles = StyleSheet.create({
   qr: { backgroundColor: '#fff', padding: 16, borderRadius: 16 },
   code: { fontSize: 34, fontWeight: '700', letterSpacing: 4, fontFamily: 'monospace' },
   waiting: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  helpBox: { alignSelf: 'stretch', gap: 12, padding: 16, borderRadius: 14 },
+  helpStep: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  helpNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    overflow: 'hidden',
+    textAlign: 'center',
+    lineHeight: 22,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  helpText: { flex: 1, fontSize: 15, lineHeight: 21 },
 });
 
 /** Resolves once the app is on screen again. */
