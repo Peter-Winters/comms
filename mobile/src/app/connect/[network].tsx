@@ -4,6 +4,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   StyleSheet,
   View,
@@ -15,6 +16,7 @@ import QRCode from 'react-native-qrcode-svg';
 import { Text, TextInput } from '@/components/themed';
 import { CookieLogin } from '@/components/cookie-login';
 import { NetworkIcon } from '@/components/network-icon';
+import { ProvisioningError } from '@/lib/backends/matrix-bridges';
 import type { InputField, LoginFlow, LoginStep } from '@/lib/bridges';
 import { NETWORKS } from '@/lib/networks';
 import { useBackend, useColors } from '@/lib/store';
@@ -100,9 +102,38 @@ export default function Connect() {
 
   // "Display and wait" steps (QR codes, pairing codes) long-poll until the user acts on their phone.
   const step = phase.kind === 'step' ? phase.step : null;
+  // While you're in WhatsApp typing a pairing code, Android cuts this app off from the network, so
+  // the wait drops. The bridge keeps the login open, so wait until you're back and resume it.
   useEffect(() => {
     if (step?.type !== 'display_and_wait') return;
-    backend.bridges.submitStep(network, step).then(advance, fail);
+    let cancelled = false;
+    const loginIds = async () => new Set((await backend.bridges.status(network)).logins.map((l) => l.id));
+    (async () => {
+      const before = await loginIds().catch(() => new Set<string>());
+      // The login may have finished while the app was cut off; the bridge then has a new login.
+      const linkedMeanwhile = async () => {
+        const now = await loginIds().catch(() => new Set<string>());
+        return [...now].some((id) => !before.has(id));
+      };
+      for (let drops = 0; !cancelled; drops++) {
+        try {
+          const next = await backend.bridges.submitStep(network, step);
+          if (!cancelled) advance(next);
+          return;
+        } catch (e) {
+          if (cancelled) return;
+          if (drops > 0 && (await linkedMeanwhile())) return advance({ ...step, type: 'complete' });
+          if (e instanceof ProvisioningError || drops >= 20) return fail(e);
+          await untilForeground();
+          await new Promise((r) => setTimeout(r, 1500));
+          if (cancelled) return;
+          if (await linkedMeanwhile()) return advance({ ...step, type: 'complete' });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [backend, network, step, advance, fail]);
 
   const submit = async (stepToSubmit: LoginStep, input: Record<string, string>) => {
@@ -320,3 +351,15 @@ const styles = StyleSheet.create({
   code: { fontSize: 34, fontWeight: '700', letterSpacing: 4, fontFamily: 'monospace' },
   waiting: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 });
+
+/** Resolves once the app is on screen again. */
+function untilForeground() {
+  return new Promise<void>((resolve) => {
+    if (AppState.currentState === 'active') return resolve();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      sub.remove();
+      resolve();
+    });
+  });
+}
